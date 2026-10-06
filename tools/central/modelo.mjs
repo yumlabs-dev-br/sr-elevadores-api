@@ -28,6 +28,39 @@ export const rotuloPasso = (k) => {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 };
 
+/** O próximo pedido no sentido (subindo: o menor ≥ andar; descendo: o maior ≤ andar); −1 se não houver. */
+export function proximoNoSentido(andar, sentido, pedidos) {
+  let melhor = -1;
+  for (const p of pedidos) {
+    if (sentido === "sobe" && p >= andar && (melhor === -1 || p < melhor)) melhor = p;
+    if (sentido === "desce" && p <= andar && (melhor === -1 || p > melhor)) melhor = p;
+  }
+  return melhor;
+}
+
+/** Despacho de referência (algoritmo do elevador, sem disputar chamadas): o do painel de operação. */
+export function despachoPadrao() {
+  const sentidos = {};
+  return (estado) => {
+    const alvos = [];
+    const destinos = {};
+    for (const e of estado.elevadores) {
+      const livres = estado.chamadas.map((c) => c.andar).filter((a) => !alvos.includes(a));
+      const pedidos = [...e.destinos, ...(e.lotacao < e.capacidade ? livres : [])];
+      let sentido = sentidos[e.id] ?? "sobe";
+      let alvo = proximoNoSentido(e.andar, sentido, pedidos);
+      if (alvo === -1) {
+        sentido = sentido === "sobe" ? "desce" : "sobe";
+        alvo = proximoNoSentido(e.andar, sentido, pedidos);
+      }
+      sentidos[e.id] = sentido;
+      destinos[e.id] = alvo;
+      if (alvo !== -1) alvos.push(alvo);
+    }
+    return { destinos };
+  };
+}
+
 /** Movimentos do prédio: { elevadores, chegada (pessoas por passo), doTerreo, paraTerreo }. */
 export const MOVIMENTO = {
   tranquilo: { elevadores: 1, chegada: 0.12, doTerreo: 0.3, paraTerreo: 0.3 },
@@ -69,10 +102,11 @@ export function cenario(m, semente) {
  *   1. quem chegou → aoChegar(pessoa, segundos)
  *   2. decidir(estado) → { destinos: { A: andar } }  (−1 ou null = parado)
  *   3. os elevadores andam; ao abrir a porta: aoDesembarcar / aoEmbarcar
+ *   4. aoPasso(quadro, cabines, esperando) — fim do passo
  * Qualquer exceção nos ganchos interrompe e vira o erro da rodada.
  * Custo = segundos esperando + segundos dentro; espera acima de 1 min conta triplo.
  */
-export async function simular(m, semente, { decidir, aoChegar = async () => {}, aoEmbarcar = async () => {}, aoDesembarcar = async () => {} }) {
+export async function simular(m, semente, { decidir, aoChegar = async () => {}, aoEmbarcar = async () => {}, aoDesembarcar = async () => {}, aoPasso = async () => {} }) {
   const todas = cenario(m, semente);
   const cabines = Array.from({ length: m.elevadores }, (_, i) => ({ id: "AB"[i], andar: 0, destino: null, porta: false, dentro: [] }));
   const esperando = [];
@@ -152,6 +186,7 @@ export async function simular(m, semente, { decidir, aoChegar = async () => {}, 
         viagem,
         irritacao,
       });
+      await aoPasso(quadros[quadros.length - 1], cabines, esperando);
     }
   } catch (e) {
     return fim(e instanceof Error ? e.message : String(e));
