@@ -1,0 +1,151 @@
+openapi: 3.1.0
+info:
+  title: Serviço de despacho de elevadores
+  version: 1.0.0
+  description: |
+    API que guarda as chamadas de elevador de um prédio de 10 andares (0 a 9) e
+    decide para onde cada elevador vai. Os tempos ("segundos", "criada_em",
+    "embarque_em", "chegada_em") são segundos da simulação do prédio.
+    Todo erro responde JSON no formato {"erro": "mensagem"}.
+servers:
+  - url: http://localhost:3000
+paths:
+  /saude:
+    get:
+      summary: O serviço está no ar?
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { const: true } } } } } }
+  /chamadas:
+    post:
+      summary: Registra uma chamada (Etapa 1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NovaChamada" }
+            example: { andar: 3, destino: 0, segundos: 15 }
+      responses:
+        "201":
+          description: Criada
+          headers: { Location: { description: /chamadas/{id}, schema: { type: string } } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/Chamada" } } }
+        "400": { $ref: "#/components/responses/Erro" }
+    get:
+      summary: Lista chamadas, com filtro e paginação (Etapas 1 e 3)
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/Status" } }
+        - { name: pagina, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: por_pagina, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Uma página, ordenada por id
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [itens, total, pagina, por_pagina]
+                properties:
+                  itens: { type: array, items: { $ref: "#/components/schemas/Chamada" } }
+                  total: { type: integer, description: total com o filtro, sem paginar }
+                  pagina: { type: integer }
+                  por_pagina: { type: integer }
+        "400": { $ref: "#/components/responses/Erro" }
+  /chamadas/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    get:
+      summary: Uma chamada
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Chamada" } } } }
+        "404": { $ref: "#/components/responses/Erro" }
+    patch:
+      summary: Muda o status (aguardando → em_viagem → concluida) (Etapa 1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, segundos]
+              properties:
+                status: { enum: [em_viagem, concluida] }
+                elevador: { type: string, description: obrigatório para em_viagem }
+                segundos: { type: integer, minimum: 0 }
+            examples:
+              embarque: { value: { status: em_viagem, elevador: A, segundos: 30 } }
+              chegada: { value: { status: concluida, segundos: 55 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Chamada" } } } }
+        "400": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { description: Mudança de status não permitida, content: { application/json: { schema: { $ref: "#/components/schemas/Erro" } } } }
+  /despacho:
+    post:
+      summary: Para onde vai cada elevador agora (Etapa 2)
+      description: Os pedidos vêm das chamadas guardadas — "aguardando" (andar) e "em_viagem" naquele elevador (destino). −1 = ficar parado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [segundos, elevadores]
+              properties:
+                segundos: { type: integer }
+                elevadores:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [id, andar]
+                    properties: { id: { type: string }, andar: { type: integer, minimum: 0, maximum: 9 }, lotacao: { type: integer }, capacidade: { type: integer } }
+            example: { segundos: 60, elevadores: [{ id: A, andar: 2, lotacao: 1, capacidade: 8 }] }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: object, properties: { destinos: { type: object, additionalProperties: { type: integer } } } }, example: { destinos: { A: 5 } } } }
+        "400": { $ref: "#/components/responses/Erro" }
+  /metricas:
+    get:
+      summary: Números do prédio (Etapa 4)
+      description: Espera = embarque_em − criada_em, só de quem embarcou. Médias com 1 casa. p95 = a espera na posição ⌈0,95 × n⌉ das esperas ordenadas.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chamadas: { type: integer }
+                  concluidas: { type: integer }
+                  espera_media_s: { type: [number, "null"] }
+                  espera_p95_s: { type: [integer, "null"] }
+                  por_andar:
+                    type: array
+                    description: um item por andar que teve chamada, em ordem de andar
+                    items: { type: object, properties: { andar: { type: integer }, chamadas: { type: integer }, espera_media_s: { type: [number, "null"] } } }
+components:
+  schemas:
+    Status: { enum: [aguardando, em_viagem, concluida] }
+    NovaChamada:
+      type: object
+      required: [andar, destino, segundos]
+      properties:
+        andar: { type: integer, minimum: 0, maximum: 9 }
+        destino: { type: integer, minimum: 0, maximum: 9, description: diferente de andar }
+        segundos: { type: integer, minimum: 0 }
+    Chamada:
+      type: object
+      properties:
+        id: { type: integer }
+        andar: { type: integer }
+        destino: { type: integer }
+        status: { $ref: "#/components/schemas/Status" }
+        elevador: { type: [string, "null"] }
+        criada_em: { type: integer }
+        embarque_em: { type: [integer, "null"] }
+        chegada_em: { type: [integer, "null"] }
+    Erro: { type: object, required: [erro], properties: { erro: { type: string } } }
+  responses:
+    Erro: { description: Erro, content: { application/json: { schema: { $ref: "#/components/schemas/Erro" } } } }
