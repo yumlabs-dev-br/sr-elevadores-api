@@ -12,7 +12,7 @@
     "start": "tsx src/server.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "central": "node tools/central/cli.mjs"
+    "central": "node tools/central/cli.mjs despacho"
   },
   "dependencies": {
     "express": "^5.1.0"
